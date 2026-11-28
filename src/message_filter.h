@@ -88,6 +88,17 @@ std::string trim_copy(const std::string &s);
 // The heuristic itself: should this cleaned expression be calculated?
 Verdict should_calculate(const std::string &cleaned);
 
+// The filter accepts "5 kg in lb" as a conversion, but libqalculate reads
+// that "in" as inches ("2.27 in*kg^2"). Rewrites the separator to "to";
+// any other input is returned unchanged.
+std::string normalize_conversion(const std::string &cleaned);
+
+// Extracts the identifiers ("words") of an expression: a letter followed by
+// letters, digits or underscores, e.g. "km", "sqrt", "log10", "icin".
+// The exponent marker of scientific notation ("1e3", "2.5E-4") is not a
+// word. Each word is returned UTF-8 encoded.
+std::vector<std::string> extract_words(const std::string &expr);
+
 // Sanity checks on an evaluation result, applied after the engine ran:
 // rejects empty results, echoed input, decimal-shifted echoes and
 // number/gibberish mixtures that are not real expressions.

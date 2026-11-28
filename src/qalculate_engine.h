@@ -34,6 +34,14 @@ public:
     // Returns an empty string when the evaluation failed or was aborted.
     std::string evaluate(const std::string &expr);
 
+    // True when every word of the expression is something libqalculate
+    // knows by that exact name: a unit (optionally with a prefix, "km"),
+    // a variable/constant, a function or an operator keyword ("to").
+    // libqalculate otherwise splits an unknown word into one-letter units,
+    // prefixes and constants and multiplies them: "60hz icin" evaluates to
+    // "0.6iz h*in" and "5 elma" to "13.59 a*lm".
+    bool all_words_known(const std::string &expr);
+
     // Mirrors the qalc CLI: re-download exchange rates when they are
     // older than a week.
     void refresh_exchange_rates();
