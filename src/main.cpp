@@ -89,6 +89,28 @@ void run_selftest() {
         {"10 km to miles",                             "pass", "any"}, // unit conversion
         {"sin(30)+2^10",                               "pass", "any"},
         {"142*5/2",                                    "pass", "355"},
+        // Unknown words split into one-letter units/constants.
+        {"60hz icin",                                  "pass", ""},   // "0.6iz h*in"
+        {"5 elma",                                     "pass", ""},   // "13.59 a*lm"
+        {"1 tane",                                     "pass", ""},   // tan(e)
+        {"512gb ssd",                                  "pass", ""},
+        {"10 mb",                                      "pass", ""},   // millibarn
+        {"3 ad",                                       "pass", ""},   // atto-day
+        {"2 mi",                                       "pass", ""},   // Turkish particle, not miles
+        {"3rd",                                        "pass", ""},   // ordinal, not rods
+        {"1e3+1",                                      "pass", "1001"},
+        {"3 GB to MB",                                 "pass", "any"},
+        {"5 mg to g",                                  "pass", "any"},
+        {"2 hours + 30 min",                           "pass", "any"},
+        // Chat idioms, clock times and bare signed numbers.
+        {"12:30",                                      "skip", ""},
+        {"50/50",                                      "skip", ""},
+        {"7/24",                                       "skip", ""},
+        {"3-0",                                        "skip", ""},
+        {"+1",                                         "skip", ""},
+        {"-1",                                         "skip", ""},
+        {"1/2",                                        "pass", "any"},
+        {"5-3",                                        "pass", "2"},
     };
 
     int failures = 0;
@@ -100,8 +122,8 @@ void run_selftest() {
         // Full pipeline: only a filter pass even reaches evaluation, and a
         // result that fails the sanity checks is never sent to the channel.
         std::string result;
-        if (filter_pass) {
-            result = g_engine->evaluate(input);
+        if (filter_pass && g_engine->all_words_known(input)) {
+            result = g_engine->evaluate(qalcbot::normalize_conversion(input));
             if (!result.empty() && !qalcbot::result_is_sane(input, result)) result.clear();
         }
 
@@ -221,8 +243,13 @@ int run_bot(const char *token) {
         // e. Heuristic filter.
         if (qalcbot::should_calculate(cleaned) != qalcbot::Verdict::Calculate) return;
 
+        // Every word must be a real unit/variable/function name; otherwise
+        // libqalculate would split it into one-letter units ("icin" ->
+        // "i*c*i*n") and reply with nonsense.
+        if (!g_engine->all_words_known(cleaned)) return;
+
         // f. Evaluate, sanity-check, and reply with the original text.
-        std::string result = g_engine->evaluate(cleaned);
+        std::string result = g_engine->evaluate(qalcbot::normalize_conversion(cleaned));
         if (result.empty() || !qalcbot::result_is_sane(cleaned, result)) {
             // g. Failure is silent.
             return;

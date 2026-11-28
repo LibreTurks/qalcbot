@@ -11,11 +11,16 @@
 #include "qalculate_engine.h"
 
 #include <libqalculate/Calculator.h>
+#include <libqalculate/Unit.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cctype>
 #include <iostream>
+#include <set>
+#include <vector>
+
+#include "message_filter.h"
 
 namespace {
 
@@ -119,6 +124,53 @@ std::string QalculateEngine::evaluate(const std::string &expr) {
 
     strip_control_chars(res);
     return trim(res);
+}
+
+bool QalculateEngine::all_words_known(const std::string &expr) {
+    // Operator keywords understood by the parser.
+    static const std::set<std::string> keywords = {
+        "to", "into", "per", "mod", "rem", "and", "or", "not", "xor",
+    };
+
+    // Words that are valid names but in a chat almost always mean something
+    // else: Turkish particles ("2 mi?" is not 2 miles, "10 da" is not 10
+    // decares) and English ordinal suffixes ("3rd" is not 3 rods).
+    static const std::set<std::string> chat_words = {
+        "mi", "mı", "mu", "mü", "da", "de", "ta", "te", "ki", "ne", "ve", "ya",
+        "st", "nd", "rd", "th",
+    };
+
+    // Common unit products written as one word, which are not names of
+    // their own ("kWh" is parsed as kW*h).
+    static const std::set<std::string> compound_units = {
+        "Wh", "kWh", "MWh", "GWh", "TWh", "Ah", "mAh",
+    };
+
+    const std::vector<std::string> words = qalcbot::extract_words(expr);
+    if (words.empty()) return true;
+
+    std::lock_guard<std::mutex> lock(calc_mutex_);
+    if (!CALCULATOR) return false;
+
+    for (const std::string &w : words) {
+        if (keywords.count(w)) continue;
+        if (chat_words.count(w)) return false;
+        if (compound_units.count(w)) continue;
+        if (CALCULATOR->getActiveExpressionItem(w)) continue;
+
+        // Prefixed unit: "km", "mg", "GB", "µs", "kcal". A one-letter unit
+        // that is not normally prefixed is rejected, so "ad" (atto-day),
+        // "mb" (millibarn) and "kb" (kilobarn) are not accepted.
+        bool prefixed = false;
+        for (size_t split = 1; split < w.size() && !prefixed; ++split) {
+            if (!CALCULATOR->getPrefix(w.substr(0, split))) continue;
+            const std::string base = w.substr(split);
+            const Unit *u = CALCULATOR->getActiveUnit(base);
+            prefixed = u && (u->useWithPrefixesByDefault() || base.size() > 1);
+        }
+        if (!prefixed) return false;
+    }
+    return true;
 }
 
 void QalculateEngine::refresh_exchange_rates() {

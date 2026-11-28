@@ -167,7 +167,77 @@ int token_letter_count(const std::vector<uint32_t> &t) {
     return count;
 }
 
+void append_utf8(std::string &out, uint32_t cp) {
+    if (cp < 0x80) {
+        out += static_cast<char>(cp);
+    } else if (cp < 0x800) {
+        out += static_cast<char>(0xC0 | (cp >> 6));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        out += static_cast<char>(0xE0 | (cp >> 12));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else {
+        out += static_cast<char>(0xF0 | (cp >> 18));
+        out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+}
+
+// "12:30", "9:05:59" -- a clock time, not a calculation.
+bool is_clock_time(const std::string &s) {
+    static const std::regex re(R"(^\s*\d{1,2}:\d{2}(?::\d{2})?\s*$)", std::regex::ECMAScript);
+    return std::regex_match(s, re);
+}
+
+// Chat idioms that happen to be valid arithmetic: "50/50", "10/10", "1-1",
+// "3-0" (scores), "7/24" and "24/7" (around the clock).
+bool is_chat_idiom(const std::string &s) {
+    static const std::regex re(R"(^\s*(\d+)\s*([-/])\s*(\d+)\s*$)", std::regex::ECMAScript);
+    std::smatch m;
+    if (!std::regex_match(s, m, re)) return false;
+    const std::string a = m.str(1), op = m.str(2), b = m.str(3);
+    if (a == b) return true;
+    if (op == "-" && b == "0") return true;
+    return op == "/" && ((a == "7" && b == "24") || (a == "24" && b == "7"));
+}
+
 } // namespace
+
+std::string normalize_conversion(const std::string &cleaned) {
+    static const std::regex re(R"(^(\s*[-+]?[\d.,]+\s*[A-Za-z]+\s+)in(\s+[A-Za-z]+\s*)$)",
+                               std::regex::icase | std::regex::ECMAScript);
+    return std::regex_replace(cleaned, re, "$1to$2");
+}
+
+std::vector<std::string> extract_words(const std::string &expr) {
+    const std::vector<uint32_t> s = utf8_to_codepoints(expr);
+    std::vector<std::string> words;
+    size_t i = 0, n = s.size();
+    while (i < n) {
+        if (!is_letter_cp(s[i])) { ++i; continue; }
+        const size_t start = i;
+        while (i < n && (is_letter_cp(s[i]) || is_digit_cp(s[i]) || s[i] == '_')) ++i;
+
+        // Scientific notation: a digit, then e/E, then digits or a signed
+        // exponent ("1e3", "1E+3", "2.5e-4").
+        if (start > 0 && (is_digit_cp(s[start - 1]) || s[start - 1] == '.') &&
+            (s[start] == 'e' || s[start] == 'E')) {
+            size_t k = start + 1;
+            while (k < i && is_digit_cp(s[k])) ++k;
+            const bool digits_only = k == i && i > start + 1;
+            const bool signed_exp = i == start + 1 && i + 1 < n &&
+                                    (s[i] == '+' || s[i] == '-') && is_digit_cp(s[i + 1]);
+            if (digits_only || signed_exp) continue;
+        }
+
+        std::string word;
+        for (size_t k = start; k < i; ++k) append_utf8(word, s[k]);
+        words.push_back(std::move(word));
+    }
+    return words;
+}
 
 std::string trim_copy(const std::string &s) {
     size_t b = 0, e = s.size();
@@ -201,10 +271,19 @@ Verdict should_calculate(const std::string &cleaned) {
     // 2. An expression followed by a sentence ("1+1 that was easy") is not.
     if (expression_followed_by_message(cps)) return Verdict::Skip;
 
+    // A clock time ("12:30") or a chat idiom ("50/50", "3-0", "7/24").
+    if (is_clock_time(cleaned) || is_chat_idiom(cleaned)) return Verdict::Skip;
+
     // 3. Only math characters: a bare number is not worth replying to.
+    // A leading sign alone ("+1", "-1") does not make it an expression.
     if (is_simple_math(cps)) {
+        size_t first = 0;
+        while (first < cps.size() && is_ws(cps[first])) ++first;
+        if (first < cps.size() && (cps[first] == '+' || cps[first] == '-')) ++first;
         bool has_op = false;
-        for (uint32_t cp : cps) if (is_math_op(cp)) { has_op = true; break; }
+        for (size_t k = first; k < cps.size(); ++k) {
+            if (is_math_op(cps[k])) { has_op = true; break; }
+        }
         if (!has_op) return Verdict::Skip;
     } else {
         // 4. Not a plain math expression.
